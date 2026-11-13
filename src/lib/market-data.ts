@@ -85,33 +85,53 @@ async function fetchBybitSpotGold(
   const pageSize = 1000;
   const pagesNeeded = Math.min(10, Math.ceil(targetLimit / pageSize));
 
+  const hosts = ['https://api.bybit.com', 'https://api.bytick.com'];
   let allBars: (string | number)[][] = [];
-  let currentEndTime: number | undefined = undefined;
 
-  for (let p = 0; p < pagesNeeded; p++) {
-    const fetchLimit = Math.min(pageSize, targetLimit - allBars.length);
-    let url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${bybitInterval}&limit=${fetchLimit}`;
-    if (currentEndTime) {
-      url += `&end=${currentEndTime}`;
+  for (const host of hosts) {
+    allBars = [];
+    let currentEndTime: number | undefined = undefined;
+    let failed = false;
+
+    for (let p = 0; p < pagesNeeded; p++) {
+      const fetchLimit = Math.min(pageSize, targetLimit - allBars.length);
+      let url = `${host}/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${bybitInterval}&limit=${fetchLimit}`;
+      if (currentEndTime) {
+        url += `&end=${currentEndTime}`;
+      }
+
+      try {
+        const res = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          cache: 'no-store',
+          signal: AbortSignal.timeout(6000),
+        });
+
+        if (!res.ok) {
+          failed = true;
+          break;
+        }
+        const json = await res.json();
+        const list = json.result?.list;
+        if (!list || !Array.isArray(list) || list.length === 0) {
+          if (allBars.length === 0) failed = true;
+          break;
+        }
+
+        allBars = [...allBars, ...list];
+        const oldestInBatch = list[list.length - 1];
+        currentEndTime = Number(oldestInBatch[0]) - 1;
+
+        if (list.length < fetchLimit) break;
+      } catch {
+        failed = true;
+        break;
+      }
     }
 
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!res.ok) break;
-    const json = await res.json();
-    const list = json.result?.list;
-    if (!list || !Array.isArray(list) || list.length === 0) break;
-
-    // Bybit returns newest first
-    allBars = [...allBars, ...list];
-    const oldestInBatch = list[list.length - 1];
-    currentEndTime = Number(oldestInBatch[0]) - 1;
-
-    if (list.length < fetchLimit) break;
+    if (!failed && allBars.length > 0) {
+      break;
+    }
   }
 
   if (allBars.length === 0) {
@@ -307,6 +327,52 @@ export async function fetchMarketKlines(
 }
 
 /**
+ * Fetch latest candle from Yahoo Finance (used for US100, US500, and as universal fallback for XAU)
+ */
+async function fetchYahooLatestCandle(
+  ticker: string,
+  interval: Timeframe = '1h'
+): Promise<Candle | null> {
+  try {
+    const yfInterval = interval === '4h' ? '1h' : interval;
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+        ticker
+      )}?interval=${yfInterval}&range=1d`,
+      {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    const result = json.chart?.result?.[0];
+    if (!result) return null;
+    const ts = result.timestamp || [];
+    const q = result.indicators?.quote?.[0] || {};
+    const len = ts.length;
+    if (len === 0) return null;
+
+    const rawTime = ts[len - 1];
+    const intervalSec = getIntervalSeconds(interval);
+    const bucketTime = interval === '1d' ? rawTime : Math.floor(rawTime / intervalSec) * intervalSec;
+
+    return {
+      time: bucketTime,
+      open: Math.round((q.open?.[len - 1] ?? q.close?.[len - 1]) * 100) / 100,
+      high: Math.round((q.high?.[len - 1] ?? q.close?.[len - 1]) * 100) / 100,
+      low: Math.round((q.low?.[len - 1] ?? q.close?.[len - 1]) * 100) / 100,
+      close: Math.round((q.close?.[len - 1] ?? 0) * 100) / 100,
+      volume: Math.round(q.volume?.[len - 1] ?? 0),
+    };
+  } catch (err) {
+    console.error(`Error in fetchYahooLatestCandle for ${ticker}:`, err);
+    return null;
+  }
+}
+
+/**
  * Fetch only the single latest candle and current live price
  * Used for live real-time ticking
  */
@@ -334,56 +400,42 @@ export async function fetchLatestCandle(
           break;
       }
 
-      const res = await fetch(
-        `https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${bybitInterval}&limit=1`,
-        { cache: 'no-store' }
-      );
-      if (!res.ok) return null;
-      const json = await res.json();
-      const list = json.result?.list;
-      if (!list || !Array.isArray(list) || list.length === 0) return null;
-
-      const bar = list[0];
-      return {
-        time: Math.floor(Number(bar[0]) / 1000),
-        open: Math.round(parseFloat(bar[1] as string) * 100) / 100,
-        high: Math.round(parseFloat(bar[2] as string) * 100) / 100,
-        low: Math.round(parseFloat(bar[3] as string) * 100) / 100,
-        close: Math.round(parseFloat(bar[4] as string) * 100) / 100,
-        volume: Math.round(parseFloat(bar[5] as string) * 100) / 100,
-      };
-    } else {
-      const yfInterval = interval === '4h' ? '1h' : interval;
-      const res = await fetch(
-        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-          asset.ticker
-        )}?interval=${yfInterval}&range=1d`,
-        {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          cache: 'no-store',
+      // 1. Try Bybit official endpoints
+      const hosts = ['https://api.bybit.com', 'https://api.bytick.com'];
+      for (const host of hosts) {
+        try {
+          const res = await fetch(
+            `${host}/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${bybitInterval}&limit=1`,
+            {
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+              cache: 'no-store',
+              signal: AbortSignal.timeout(4000),
+            }
+          );
+          if (res.ok) {
+            const json = await res.json();
+            const list = json.result?.list;
+            if (list && Array.isArray(list) && list.length > 0) {
+              const bar = list[0];
+              return {
+                time: Math.floor(Number(bar[0]) / 1000),
+                open: Math.round(parseFloat(bar[1] as string) * 100) / 100,
+                high: Math.round(parseFloat(bar[2] as string) * 100) / 100,
+                low: Math.round(parseFloat(bar[3] as string) * 100) / 100,
+                close: Math.round(parseFloat(bar[4] as string) * 100) / 100,
+                volume: Math.round(parseFloat(bar[5] as string) * 100) / 100,
+              };
+            }
+          }
+        } catch {
+          // try next host
         }
-      );
-      if (!res.ok) return null;
-      const json = await res.json();
-      const result = json.chart?.result?.[0];
-      if (!result) return null;
-      const ts = result.timestamp || [];
-      const q = result.indicators?.quote?.[0] || {};
-      const len = ts.length;
-      if (len === 0) return null;
+      }
 
-      const rawTime = ts[len - 1];
-      const intervalSec = getIntervalSeconds(interval);
-      const bucketTime = interval === '1d' ? rawTime : Math.floor(rawTime / intervalSec) * intervalSec;
-
-      return {
-        time: bucketTime,
-        open: Math.round((q.open?.[len - 1] ?? q.close?.[len - 1]) * 100) / 100,
-        high: Math.round((q.high?.[len - 1] ?? q.close?.[len - 1]) * 100) / 100,
-        low: Math.round((q.low?.[len - 1] ?? q.close?.[len - 1]) * 100) / 100,
-        close: Math.round((q.close?.[len - 1] ?? 0) * 100) / 100,
-        volume: Math.round(q.volume?.[len - 1] ?? 0),
-      };
+      // 2. Fallback to Yahoo Finance GC=F if Bybit endpoints are blocked in cloud datacenter
+      return await fetchYahooLatestCandle('GC=F', interval);
+    } else {
+      return await fetchYahooLatestCandle(asset.ticker, interval);
     }
   } catch (error) {
     console.error('Error fetching latest candle:', error);
