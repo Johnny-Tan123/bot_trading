@@ -5,6 +5,9 @@ import { runBacktest } from '@/engine/simulator';
 import { BacktestConfig } from '@/types/backtest';
 import { Timeframe } from '@/types/market';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();

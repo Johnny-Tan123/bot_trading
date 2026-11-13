@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchLatestCandle } from '@/lib/market-data';
 import { Timeframe } from '@/types/market';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(req: NextRequest) {
   try {
-    const symbol = req.nextUrl.searchParams.get('symbol') || 'XAU';
-    const timeframe = (req.nextUrl.searchParams.get('timeframe') as Timeframe) || '1h';
+    const { searchParams } = new URL(req.url);
+    const symbol = searchParams.get('symbol') || 'XAU';
+    const timeframe = (searchParams.get('timeframe') as Timeframe) || '1h';
 
     const candle = await fetchLatestCandle(symbol, timeframe);
 
@@ -21,7 +25,7 @@ export async function GET(req: NextRequest) {
       },
       {
         headers: {
-          'Cache-Control': 'no-store, max-age=0',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         },
       }
     );

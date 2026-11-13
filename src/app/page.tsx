@@ -111,65 +111,170 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, limit]);
 
-  // Realtime Live Candle Polling (updates forming candle every 4s)
+  // Handler for live candle tick update
+  const handleLiveCandleUpdate = useCallback((liveCandle: Candle) => {
+    setCandles((prev) => {
+      if (!prev || prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+
+      if (liveCandle.time === last.time) {
+        // Update current candle values
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          time: liveCandle.time,
+          open: last.open,
+          high: Math.max(last.high, liveCandle.high),
+          low: Math.min(last.low, liveCandle.low),
+          close: liveCandle.close,
+          volume: Math.max(last.volume, liveCandle.volume),
+        };
+        return updated;
+      } else if (liveCandle.time > last.time) {
+        const intervalSec =
+          timeframe === '15m'
+            ? 900
+            : timeframe === '1h'
+            ? 3600
+            : timeframe === '4h'
+            ? 14400
+            : 86400;
+
+        // If missed more than 1 bar (e.g. computer was asleep, server paused), auto re-sync full dataset
+        if (liveCandle.time - last.time > intervalSec * 1.5) {
+          executeBacktest();
+          return prev;
+        }
+
+        // Normal new candle started: append cleanly
+        return [...prev, liveCandle];
+      }
+      return prev;
+    });
+  }, [timeframe, executeBacktest]);
+
+  // 1. Direct WebSocket for Gold (XAU) - Zero Latency, 24/7 Live Ticking directly from Bybit
+  useEffect(() => {
+    if (!isLiveSync || loading || symbol !== 'XAU') return;
+
+    const topicInterval =
+      timeframe === '15m' ? '15' : timeframe === '4h' ? '240' : timeframe === '1d' ? 'D' : '60';
+
+    let ws: WebSocket | null = null;
+    let isSubscribed = true;
+
+    try {
+      ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+
+      ws.onopen = () => {
+        if (!isSubscribed || !ws) return;
+        ws.send(
+          JSON.stringify({
+            op: 'subscribe',
+            args: [`kline.${topicInterval}.XAUUSDT`],
+          })
+        );
+      };
+
+      ws.onmessage = (event) => {
+        if (!isSubscribed) return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.topic && msg.data && msg.data[0]) {
+            const d = msg.data[0];
+            handleLiveCandleUpdate({
+              time: Math.floor(Number(d.start) / 1000),
+              open: Math.round(parseFloat(d.open) * 100) / 100,
+              high: Math.round(parseFloat(d.high) * 100) / 100,
+              low: Math.round(parseFloat(d.low) * 100) / 100,
+              close: Math.round(parseFloat(d.close) * 100) / 100,
+              volume: Math.round(parseFloat(d.volume) * 100) / 100,
+            });
+          }
+        } catch {
+          // ignore parsing error
+        }
+      };
+
+      ws.onerror = () => {
+        // Fallback polling will handle updates seamlessly
+      };
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      isSubscribed = false;
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, [isLiveSync, loading, symbol, timeframe, handleLiveCandleUpdate]);
+
+  // 2. Realtime Polling Fallback (For US100, US500, and as backup for XAU)
   useEffect(() => {
     if (!isLiveSync || loading) return;
 
+    const topicInterval =
+      timeframe === '15m' ? '15' : timeframe === '4h' ? '240' : timeframe === '1d' ? 'D' : '60';
+
     const intervalId = setInterval(async () => {
       try {
-        const res = await fetch(
-          `/api/live-candle?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`,
-          { cache: 'no-store' }
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        const liveCandle: Candle = data.candle;
-        if (!liveCandle) return;
+        let liveCandle: Candle | null = null;
 
-        setCandles((prev) => {
-          if (!prev || prev.length === 0) return prev;
-          const last = prev[prev.length - 1];
-
-          if (liveCandle.time === last.time) {
-            // Update current candle values
-            const updated = [...prev];
-            updated[updated.length - 1] = {
-              time: liveCandle.time,
-              open: last.open,
-              high: Math.max(last.high, liveCandle.high),
-              low: Math.min(last.low, liveCandle.low),
-              close: liveCandle.close,
-              volume: Math.max(last.volume, liveCandle.volume),
-            };
-            return updated;
-          } else if (liveCandle.time > last.time) {
-            const intervalSec =
-              timeframe === '15m'
-                ? 900
-                : timeframe === '1h'
-                ? 3600
-                : timeframe === '4h'
-                ? 14400
-                : 86400;
-
-            // If missed more than 1 bar (e.g. computer was asleep, server paused), auto re-sync full dataset
-            if (liveCandle.time - last.time > intervalSec * 1.5) {
-              executeBacktest();
-              return prev;
-            }
-
-            // Normal new candle started: append cleanly
-            return [...prev, liveCandle];
+        // Try local / Vercel API endpoint first
+        try {
+          const res = await fetch(
+            `/api/live-candle?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`,
+            { cache: 'no-store' }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            liveCandle = data.candle;
           }
-          return prev;
-        });
+        } catch {
+          // ignore API error
+        }
+
+        // Direct client-side Bybit fallback for Gold if API is cold-starting or offline
+        if (!liveCandle && symbol === 'XAU') {
+          try {
+            const bbRes = await fetch(
+              `https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${topicInterval}&limit=1`,
+              { cache: 'no-store' }
+            );
+            if (bbRes.ok) {
+              const bbJson = await bbRes.json();
+              const bar = bbJson.result?.list?.[0];
+              if (bar) {
+                liveCandle = {
+                  time: Math.floor(Number(bar[0]) / 1000),
+                  open: Math.round(parseFloat(bar[1] as string) * 100) / 100,
+                  high: Math.round(parseFloat(bar[2] as string) * 100) / 100,
+                  low: Math.round(parseFloat(bar[3] as string) * 100) / 100,
+                  close: Math.round(parseFloat(bar[4] as string) * 100) / 100,
+                  volume: Math.round(parseFloat(bar[5] as string) * 100) / 100,
+                };
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (liveCandle) {
+          handleLiveCandleUpdate(liveCandle);
+        }
       } catch {
         // Silently ignore live polling network errors
       }
     }, 4000);
 
     return () => clearInterval(intervalId);
-  }, [isLiveSync, loading, symbol, timeframe]);
+  }, [isLiveSync, loading, symbol, timeframe, handleLiveCandleUpdate]);
 
   if (!mounted) {
     return (
