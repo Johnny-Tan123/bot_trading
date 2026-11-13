@@ -42,6 +42,10 @@ export const SUPPORTED_PAIRS: MarketAsset[] = [
  */
 function getIntervalSeconds(interval: Timeframe): number {
   switch (interval) {
+    case '1m':
+      return 60;
+    case '5m':
+      return 5 * 60;
     case '15m':
       return 15 * 60;
     case '1h':
@@ -65,6 +69,12 @@ async function fetchBybitSpotGold(
 ): Promise<Candle[]> {
   let bybitInterval = '60';
   switch (interval) {
+    case '1m':
+      bybitInterval = '1';
+      break;
+    case '5m':
+      bybitInterval = '5';
+      break;
     case '15m':
       bybitInterval = '15';
       break;
@@ -170,6 +180,14 @@ async function fetchYahooFutures(
   const intervalSec = getIntervalSeconds(interval);
 
   switch (interval) {
+    case '1m':
+      yfInterval = '1m';
+      yfRange = '5d';
+      break;
+    case '5m':
+      yfInterval = '5m';
+      yfRange = '30d';
+      break;
     case '15m':
       yfInterval = '15m';
       yfRange = '60d';
@@ -386,6 +404,12 @@ export async function fetchLatestCandle(
     if (asset.symbol === 'XAU') {
       let bybitInterval = '60';
       switch (interval) {
+        case '1m':
+          bybitInterval = '1';
+          break;
+        case '5m':
+          bybitInterval = '5';
+          break;
         case '15m':
           bybitInterval = '15';
           break;

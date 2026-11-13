@@ -3,7 +3,7 @@
 import React from 'react';
 import { SUPPORTED_PAIRS } from '@/lib/market-data';
 import { Timeframe } from '@/types/market';
-import { Play, Loader2, DollarSign, Activity } from 'lucide-react';
+import { Play, Loader2, DollarSign, Activity, Keyboard } from 'lucide-react';
 
 interface ControlBarProps {
   symbol: string;
@@ -22,9 +22,12 @@ interface ControlBarProps {
   loading: boolean;
   isLiveSync: boolean;
   setIsLiveSync: (v: boolean) => void;
+  onOpenIntervalDialog?: () => void;
 }
 
 const TIMEFRAMES: { label: string; value: Timeframe }[] = [
+  { label: '1m', value: '1m' },
+  { label: '5m', value: '5m' },
   { label: '15m', value: '15m' },
   { label: '1h', value: '1h' },
   { label: '4h', value: '4h' },
@@ -48,6 +51,7 @@ export function ControlBar({
   loading,
   isLiveSync,
   setIsLiveSync,
+  onOpenIntervalDialog,
 }: ControlBarProps) {
   return (
     <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
@@ -86,6 +90,17 @@ export function ControlBar({
               {tf.label}
             </button>
           ))}
+          {onOpenIntervalDialog && (
+            <button
+              type="button"
+              onClick={onOpenIntervalDialog}
+              title="TradingView Hotkey: Bấm phím số bất kỳ trên bàn phím (1, 5, 15, 1h, 4h, 1d) để đổi khung nhanh"
+              className="hidden lg:flex items-center gap-1 text-[11px] px-2 py-0.5 rounded text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 transition border border-dashed border-zinc-800 cursor-pointer"
+            >
+              <Keyboard className="w-3 h-3 text-zinc-400" />
+              <span>Gõ số (1, 5, 1h...)</span>
+            </button>
+          )}
         </div>
 
         {/* Candles limit */}

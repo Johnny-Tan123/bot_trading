@@ -9,6 +9,7 @@ import { CandlestickChart } from '@/components/CandlestickChart';
 import { EquityChart } from '@/components/EquityChart';
 import { TPOChart } from '@/components/TPOChart';
 import { TradeTable } from '@/components/TradeTable';
+import { QuickIntervalDialog } from '@/components/QuickIntervalDialog';
 import { Timeframe, Candle } from '@/types/market';
 import { BacktestResult, Trade } from '@/types/backtest';
 import { ictStrategy } from '@/engine/strategies';
@@ -30,6 +31,7 @@ export default function DashboardPage() {
   const [timeframe, setTimeframe] = useState<Timeframe>('1h');
   const [limit, setLimit] = useState<number>(1000);
   const [isLiveSync, setIsLiveSync] = useState<boolean>(true);
+  const [isIntervalDialogOpen, setIsIntervalDialogOpen] = useState<boolean>(false);
 
   // Strategy & Risk controls
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>('ict-liquidity-mss');
@@ -131,7 +133,11 @@ export default function DashboardPage() {
         return updated;
       } else if (liveCandle.time > last.time) {
         const intervalSec =
-          timeframe === '15m'
+          timeframe === '1m'
+            ? 60
+            : timeframe === '5m'
+            ? 300
+            : timeframe === '15m'
             ? 900
             : timeframe === '1h'
             ? 3600
@@ -157,7 +163,17 @@ export default function DashboardPage() {
     if (!isLiveSync || loading || symbol !== 'XAU') return;
 
     const topicInterval =
-      timeframe === '15m' ? '15' : timeframe === '4h' ? '240' : timeframe === '1d' ? 'D' : '60';
+      timeframe === '1m'
+        ? '1'
+        : timeframe === '5m'
+        ? '5'
+        : timeframe === '15m'
+        ? '15'
+        : timeframe === '4h'
+        ? '240'
+        : timeframe === '1d'
+        ? 'D'
+        : '60';
 
     let ws: WebSocket | null = null;
     let isSubscribed = true;
@@ -219,7 +235,19 @@ export default function DashboardPage() {
     if (!isLiveSync || loading) return;
 
     const topicInterval =
-      timeframe === '15m' ? '15' : timeframe === '4h' ? '240' : timeframe === '1d' ? 'D' : '60';
+      timeframe === '1m'
+        ? '1'
+        : timeframe === '5m'
+        ? '5'
+        : timeframe === '15m'
+        ? '15'
+        : timeframe === '4h'
+        ? '240'
+        : timeframe === '1d'
+        ? 'D'
+        : '60';
+
+    const pollFrequency = timeframe === '1m' ? 2500 : 4000;
 
     const intervalId = setInterval(async () => {
       try {
@@ -271,7 +299,7 @@ export default function DashboardPage() {
       } catch {
         // Silently ignore live polling network errors
       }
-    }, 4000);
+    }, pollFrequency);
 
     return () => clearInterval(intervalId);
   }, [isLiveSync, loading, symbol, timeframe, handleLiveCandleUpdate]);
@@ -307,6 +335,15 @@ export default function DashboardPage() {
           loading={loading}
           isLiveSync={isLiveSync}
           setIsLiveSync={setIsLiveSync}
+          onOpenIntervalDialog={() => setIsIntervalDialogOpen(true)}
+        />
+
+        {/* Quick Interval Keyboard Dialog (TradingView Style: type 1, 5, 1h, 4h, 1d) */}
+        <QuickIntervalDialog
+          currentTimeframe={timeframe}
+          onSelectTimeframe={setTimeframe}
+          isOpen={isIntervalDialogOpen}
+          setIsOpen={setIsIntervalDialogOpen}
         />
 
         {/* Error notification if any */}
